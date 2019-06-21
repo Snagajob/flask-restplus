@@ -155,7 +155,7 @@ class Swagger(object):
         :returns: the full Swagger specification in a serializable format
         :rtype: dict
         '''
-        basepath = self.api.base_path
+        basepath = self.api.swagger_base_path if self.api.swagger_base_path is not None else self.api.base_path
         if len(basepath) > 1 and basepath.endswith('/'):
             basepath = basepath[:-1]
         infos = {

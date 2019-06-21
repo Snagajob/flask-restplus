@@ -9,6 +9,7 @@ import operator
 import re
 import six
 import sys
+from urllib.parse import urlparse, urlunparse
 
 from collections import OrderedDict
 from functools import wraps, partial
@@ -87,6 +88,14 @@ class Api(object):
     :param FormatChecker format_checker: A jsonschema.FormatChecker object that is hooked into
         the Model validator. A default or a custom FormatChecker can be provided (e.g., with custom
         checkers), otherwise the default action is to not enforce any format validation.
+    :param str swagger_base_path the API base base to use for swagger, if different from the API's base path.
+        Because swagger generates links on a web page, these links need to work when requested from outside
+        the API by the browser displaying the swagger docs.  Due to the network setup of some systems, these
+        links may require a different base path than that where the API thinks it lives.  This parameter
+        allows clients to set that base path.  An example of this is a system where nginx strips some prefix
+        from the URL path, e.g. strip version strings like /v*.  In this case, the API sees itself being served
+        from the path without the version prefix.  But external links to the API will require this prefix in
+        order to work.
     '''
 
     def __init__(self, app=None, version='1.0', title=None, description=None,
@@ -97,6 +106,7 @@ class Api(object):
             tags=None, prefix='', ordered=False,
             default_mediatype='application/json', decorators=None,
             catch_all_404s=False, serve_challenge_on_401=False, format_checker=None,
+            swagger_base_path=None,
             **kwargs):
         self.version = version
         self.title = title or 'API'
@@ -115,6 +125,7 @@ class Api(object):
         self._doc = doc
         self._doc_view = None
         self._default_error_handler = None
+        self._swagger_base_path = swagger_base_path
         self.tags = tags or []
 
         self.error_handlers = {
@@ -231,6 +242,14 @@ class Api(object):
     def _register_apidoc(self, app):
         conf = app.extensions.setdefault('restplus', {})
         if not conf.get('apidoc_registered', False):
+
+            static_url_prefix = self.swagger_base_path if self.swagger_base_path is not None else None
+            @apidoc.apidoc.add_app_template_global
+            def swagger_static(filename):
+                url = url_for('restplus_doc.static', filename=filename)
+                if static_url_prefix:
+                    url = _add_path_prefix(url, static_url_prefix)
+                return url
             app.register_blueprint(apidoc.apidoc)
         conf['apidoc_registered'] = True
 
@@ -470,6 +489,16 @@ class Api(object):
         :rtype: str
         '''
         return url_for(self.endpoint('root'), _external=False)
+
+    @cached_property
+    def swagger_base_path(self):
+        '''
+        The override for Swagger's base path, if any
+
+        :rtype: str
+        '''
+        return self._swagger_base_path
+
 
     @cached_property
     def __schema__(self):
@@ -827,3 +856,18 @@ def mask_parse_error_handler(error):
 def mask_error_handler(error):
     '''When any error occurs on mask'''
     return {'message': 'Mask error: {0}'.format(error)}, HTTPStatus.BAD_REQUEST
+
+
+def _add_path_prefix(url, path_prefix):
+    if _is_absolute(url):
+        url_parsed = urlparse(url)
+        url_parsed_prefixed = url_parsed._replace(
+            path=path_prefix + url_parsed.path
+        )
+        return urlunparse(url_parsed_prefixed)
+    else:
+        return path_prefix + url
+
+
+def _is_absolute(url):
+    return bool(urlparse(url).netloc)
